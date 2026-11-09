@@ -194,8 +194,8 @@ const IMG_KEEP=8;
 
 /* ---------- Almacenamiento ---------- */
 const DB={db:null,
-  open(){return new Promise((res,rej)=>{const r=indexedDB.open('estudio-ia',1);
-    r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore('projects',{keyPath:'id'});d.createObjectStore('sessions',{keyPath:'id'}).createIndex('projectId','projectId');};
+  open(){return new Promise((res,rej)=>{const r=indexedDB.open('estudio-ia',2);
+    r.onupgradeneeded=()=>{const d=r.result,n=d.objectStoreNames;if(!n.contains('projects'))d.createObjectStore('projects',{keyPath:'id'});if(!n.contains('sessions'))d.createObjectStore('sessions',{keyPath:'id'}).createIndex('projectId','projectId');if(!n.contains('images'))d.createObjectStore('images',{keyPath:'id'});};
     r.onsuccess=()=>{this.db=r.result;res();};r.onerror=()=>rej(r.error);});},
   tx(store,mode,fn){return new Promise((res,rej)=>{const t=this.db.transaction(store,mode);const r=fn(t.objectStore(store));let out;if(r)r.onsuccess=()=>{out=r.result;};t.oncomplete=()=>res(out);t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error||new Error('Operación cancelada'));});},
   all(s){return this.tx(s,'readonly',st=>st.getAll());},
@@ -221,6 +221,12 @@ const fmtDur=s=>{s=Math.round(s||0);return Math.floor(s/60)+':'+String(s%60).pad
 const fmtSize=b=>b>1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB';
 function show(v){document.querySelectorAll('.view').forEach(e=>e.classList.remove('on'));$('#v'+v[0].toUpperCase()+v.slice(1)).classList.add('on');}
 function readB64(blob){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]);r.onerror=()=>rej(new Error('No se pudo leer el archivo'));r.readAsDataURL(blob);});}
+function toJpegs(file){return new Promise((res,rej)=>{const url=URL.createObjectURL(file);const img=new Image();
+  img.onload=()=>{const mk=(max,q)=>{let w=img.naturalWidth,h=img.naturalHeight;const k=Math.min(1,max/Math.max(w,h));w=Math.round(w*k);h=Math.round(h*k);
+      const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);return c.toDataURL('image/jpeg',q).split(',')[1];};
+    const out={full:mk(1280,.82),thumb:mk(360,.6)};URL.revokeObjectURL(url);res(out);};
+  img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('No se pudo leer la imagen'));};img.src=url;});}
+async function delSessionImages(s){for(const m of (s&&s.messages)||[])if(m.imageId){try{await DB.del('images',m.imageId);}catch(e){}}}
 function toJpeg(file,max=1568,q=.85){return new Promise((res,rej)=>{const url=URL.createObjectURL(file);const img=new Image();
   img.onload=()=>{let w=img.naturalWidth,h=img.naturalHeight;const k=Math.min(1,max/Math.max(w,h));w=Math.round(w*k);h=Math.round(h*k);
     const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);URL.revokeObjectURL(url);res(c.toDataURL('image/jpeg',q).split(',')[1]);};
@@ -257,7 +263,7 @@ async function newSession(){
   const now=Date.now(); SES={id:uid(),projectId:P.id,created:now,updated:now,messages:[]};
   await DB.put('sessions',SES); P.sessionId=SES.id; P.updated=now; await DB.put('projects',P);
 }
-async function saveSession(){SES.updated=Date.now();await DB.put('sessions',SES);P.updated=SES.updated;await DB.put('projects',P);}
+async function saveSession(){SES.updated=Date.now();await DB.put('sessions',SES);if(SES.updated-P.updated>300000){P.updated=SES.updated;await DB.put('projects',P);}}
 
 /* ---------- Chat ---------- */
 function renderSeg(){document.querySelectorAll('#provSeg button').forEach(b=>b.classList.toggle('on',b.dataset.p===S.provider));}
@@ -270,7 +276,7 @@ function renderChat(){
 function msgHTML(m,i){
   if(m.role==='user'){
     let inner;
-    if(m.type==='image') inner=`<img class="ph" src="data:image/jpeg;base64,${m.image}" alt="Foto enviada">`;
+    if(m.type==='image') inner=`<img class="ph" src="data:image/jpeg;base64,${m.thumb||m.image}" alt="Foto enviada">`;
     else if(m.type==='audio') inner=`<div class="bub u"><div class="aud">${MIC} Audio ${fmtDur(m.dur)}</div>${m.audio?`<audio controls preload="none" src="data:${esc(m.audioMime)};base64,${m.audio}"></audio>`:''}${m.text?esc(m.text):''}</div>`;
     else inner=`<div class="bub u">${esc(m.text)}</div>`;
     return `<div class="m mu">${inner}<div class="meta">${fmtTime(m.time)}</div></div>`;
@@ -278,23 +284,35 @@ function msgHTML(m,i){
   if(m.type==='error') return `<div class="m ma"><div class="bub err"><div class="who" style="color:var(--er)">No se obtuvo respuesta</div>${esc(m.text)}<br><button class="link" data-retry="${i}">Reintentar</button></div></div>`;
   return `<div class="m ma"><div class="bub a"><div class="who">${m.provider==='gemini'?'Gemini':'Claude'}</div><div class="md">${md(m.text)}</div><button class="link" data-copy="${i}">Copiar</button></div></div>`;
 }
+function scrollEnd(){const el=$('#msgs');el.scrollTop=el.scrollHeight;}
 function renderMsgs(){
   const el=$('#msgs');
-  let h=SES.messages.length?SES.messages.map(msgHTML).join(''):'<div class="empty">Saca una foto del ejercicio, graba un audio o escribe tu pregunta. La respuesta usará el contexto de esta asignatura.</div>';
-  if(busy) h+='<div class="m ma"><div class="typing"><span class="dot"></span>'+(waitNote||'Respondiendo…')+'</div></div>';
-  el.innerHTML=h;
-  const end=()=>{el.scrollTop=el.scrollHeight;};
-  el.querySelectorAll('img').forEach(im=>im.addEventListener('load',end,{once:true})); end();
+  el.innerHTML=SES.messages.length?SES.messages.map(msgHTML).join(''):'<div class="empty">Saca una foto del ejercicio, graba un audio o escribe tu pregunta. La respuesta usará el contexto de esta asignatura.</div>';
+  el.querySelectorAll('img').forEach(im=>im.addEventListener('load',scrollEnd,{once:true}));
+  updTyping(); scrollEnd();
 }
-async function addUserMsg(m){m.role='user';m.time=Date.now();SES.messages.push(m);await saveSession();renderMsgs();kick();}
+function appendMsg(i){
+  const el=$('#msgs'); const em=el.querySelector('.empty'); if(em) em.remove();
+  const t=$('#typingEl'); const h=msgHTML(SES.messages[i],i);
+  if(t) t.insertAdjacentHTML('beforebegin',h); else el.insertAdjacentHTML('beforeend',h);
+  el.querySelectorAll('img:not([data-w])').forEach(im=>{im.dataset.w='1';im.addEventListener('load',scrollEnd,{once:true});});
+  scrollEnd();
+}
+function updTyping(){
+  let t=$('#typingEl');
+  if(busy){ if(!t){$('#msgs').insertAdjacentHTML('beforeend','<div class="m ma" id="typingEl"><div class="typing"><span class="dot"></span><span id="typingTx"></span></div></div>');}
+    $('#typingTx').textContent=waitNote||'Respondiendo…'; scrollEnd(); }
+  else if(t) t.remove();
+}
+async function addUserMsg(m){m.role='user';m.time=Date.now();SES.messages.push(m);appendMsg(SES.messages.length-1);await saveSession();kick();}
 async function kick(){
   if(busy) return; const last=SES.messages[SES.messages.length-1]; if(!last||last.role!=='user') return;
-  const ses=SES, prov=S.provider; busy=true; renderMsgs();
+  const ses=SES, prov=S.provider; busy=true; updTyping();
   let out;
   try{ const text=prov==='claude'?await callClaude(ses):await callGemini(ses); out={role:'assistant',type:'text',text:text||'(respuesta vacía)',provider:prov,time:Date.now()}; }
   catch(e){ out={role:'assistant',type:'error',text:e.message||String(e),provider:prov,time:Date.now()}; }
   ses.messages.push(out); ses.updated=Date.now(); await DB.put('sessions',ses);
-  busy=false; if(SES===ses){renderMsgs();kick();}
+  busy=false; if(SES===ses){updTyping();appendMsg(ses.messages.length-1);kick();}
 }
 
 /* ---------- Armado de la consulta ---------- */
@@ -305,7 +323,7 @@ ${(P.context||'').trim()||'(sin indicaciones)'}
 
 Normas de respuesta: responde en español, con claridad y precisión. Cuando recibas una foto de un ejercicio o enunciado, resuélvelo paso a paso y entrega el resultado final de forma explícita. Si la foto no se lee bien, dilo y pide otra. Los audios del estudiante llegan transcritos o como grabación; trátalos como sus preguntas. Escribe las expresiones matemáticas en texto plano legible (por ejemplo x², √x, ∫ x dx), sin LaTeX. Usa el material de apoyo adjunto cuando corresponda.`;
 }
-function buildTurns(ses,prov){
+async function buildTurns(ses,prov){
   const turns=[]; const push=(role,parts)=>{const l=turns[turns.length-1];
     if(l&&l.role===role){const lp=l.parts[l.parts.length-1];if(lp&&lp.k==='text'&&parts[0]&&parts[0].k==='text')parts[0]={...parts[0],text:'\n\n'+parts[0].text};l.parts.push(...parts);}
     else turns.push({role,parts});};
@@ -317,14 +335,16 @@ function buildTurns(ses,prov){
     parts[parts.length-1].cache=true; push('user',parts);
   }
   const msgs=ses.messages.filter(m=>m.type!=='error'); const cut=msgs.length-IMG_KEEP;
-  msgs.forEach((m,i)=>{
-    if(m.role==='assistant'){push('assistant',[{k:'text',text:m.text}]);return;}
-    if(m.type==='image') push('user',[i>=cut?{k:'bin',mime:'image/jpeg',data:m.image,claude:'image'}:{k:'text',text:'[Foto enviada anteriormente]'}]);
+  for(let i=0;i<msgs.length;i++){ const m=msgs[i];
+    if(m.role==='assistant'){push('assistant',[{k:'text',text:m.text}]);continue;}
+    if(m.type==='image'){ let data=m.image;
+      if(i>=cut&&m.imageId){const r=await DB.get('images',m.imageId);data=r&&r.data;}
+      push('user',[i>=cut&&data?{k:'bin',mime:'image/jpeg',data,claude:'image'}:{k:'text',text:'[Foto enviada anteriormente]'}]);}
     else if(m.type==='audio'){
       if(prov==='gemini'&&m.audio&&i>=cut) push('user',[{k:'bin',mime:m.audioMime,data:m.audio,claude:null}]);
       else push('user',[{k:'text',text:m.text||'[Audio sin transcripción]'}]);
     } else push('user',[{k:'text',text:m.text}]);
-  });
+  }
   return turns;
 }
 let waitNote='';
@@ -334,12 +354,12 @@ async function req(url,opt){const ctl=new AbortController();const t=setTimeout((
   finally{clearTimeout(t);}}
 async function reqRetry(url,opt){
   try{for(let i=0;;i++){const r=await req(url,opt);
-    if([500,503,529].includes(r.status)&&i<2){waitNote='Servicio saturado, reintentando…';renderMsgs();await new Promise(s=>setTimeout(s,(i+1)*4000));continue;}
+    if([500,503,529].includes(r.status)&&i<2){waitNote='Servicio saturado, reintentando…';updTyping();await new Promise(s=>setTimeout(s,(i+1)*4000));continue;}
     return r;}}
   finally{waitNote='';}}
 async function callClaude(ses){
   if(!S.claudeKey) throw new Error('Falta la clave de API de Claude. Ingrésala en Ajustes.');
-  const messages=buildTurns(ses,'claude').map(t=>({role:t.role,content:t.parts.map(p=>{
+  const messages=(await buildTurns(ses,'claude')).map(t=>({role:t.role,content:t.parts.map(p=>{
     let b; if(p.k==='text') b={type:'text',text:p.text}; else if(p.claude) b={type:p.claude,source:{type:'base64',media_type:p.mime,data:p.data}}; else b={type:'text',text:'[Audio no compatible]'};
     if(p.cache) b.cache_control={type:'ephemeral'}; return b;})}));
   const r=await reqRetry('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':S.claudeKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
@@ -350,7 +370,7 @@ async function callClaude(ses){
 }
 async function callGemini(ses){
   if(!S.geminiKey) throw new Error('Falta la clave de API de Gemini. Ingrésala en Ajustes.');
-  const contents=buildTurns(ses,'gemini').map(t=>({role:t.role==='assistant'?'model':'user',parts:t.parts.map(p=>p.k==='text'?{text:p.text}:{inline_data:{mime_type:p.mime,data:p.data}})}));
+  const contents=(await buildTurns(ses,'gemini')).map(t=>({role:t.role==='assistant'?'model':'user',parts:t.parts.map(p=>p.k==='text'?{text:p.text}:{inline_data:{mime_type:p.mime,data:p.data}})}));
   const model=encodeURIComponent(S.geminiModel||DEF.geminiModel);
   const r=await reqRetry(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,{method:'POST',headers:{'content-type':'application/json','x-goog-api-key':S.geminiKey},
     body:JSON.stringify({system_instruction:{parts:[{text:sysPrompt()}]},contents})});
@@ -365,7 +385,7 @@ async function callGemini(ses){
 /* ---------- Foto ---------- */
 $('#bPhoto').onclick=()=>{$('#inPhoto').value='';$('#inPhoto').click();};
 $('#inPhoto').onchange=async e=>{const f=e.target.files[0];if(!f)return;
-  try{const data=await toJpeg(f);await addUserMsg({type:'image',image:data});}catch(err){toast(err.message);}};
+  try{const im=await toJpegs(f);const id=uid();await DB.put('images',{id,data:im.full});await addUserMsg({type:'image',imageId:id,thumb:im.thumb});}catch(err){toast(err.message);}};
 
 /* ---------- Audio ---------- */
 function setAudioUI(on){const b=$('#bAudio');b.classList.toggle('rec',on);$('#live').hidden=!on;if(!on){$('#audioLbl').textContent='Audio';$('#live').textContent='';}}
@@ -455,7 +475,7 @@ async function openSessions(){
 $('#sessList').onclick=async e=>{
   const o=e.target.closest('[data-ses]'),d=e.target.closest('[data-delses]');
   if(o){if(rec)stopAudio();SES=await DB.get('sessions',o.dataset.ses);P.sessionId=SES.id;await DB.put('projects',P);renderChat();show('chat');}
-  if(d){if(!confirm('¿Eliminar esta sesión?'))return;await DB.del('sessions',d.dataset.delses);if(d.dataset.delses===SES.id)await newSession();openSessions();}
+  if(d){if(!confirm('¿Eliminar esta sesión?'))return;await delSessionImages(await DB.get('sessions',d.dataset.delses));await DB.del('sessions',d.dataset.delses);if(d.dataset.delses===SES.id)await newSession();openSessions();}
 };
 $('#bNewSess2').onclick=async()=>{await newSession();renderChat();show('chat');};
 
@@ -473,13 +493,14 @@ $('#bMenu').onclick=()=>sheet([
   {t:'Exportar asignatura',f:exportProject},
   {t:'Cambiar nombre',f:async()=>{const n=(prompt('Nuevo nombre',P.name)||'').trim();if(n){P.name=n;await DB.put('projects',P);renderChat();}}},
   {t:'Eliminar asignatura',cls:'danger',f:async()=>{if(!confirm('¿Eliminar "'+P.name+'" con todas sus sesiones? Esta acción no se puede deshacer.'))return;
-    for(const s of await DB.byProject(P.id))await DB.del('sessions',s.id);await DB.del('projects',P.id);P=null;SES=null;await renderProjects();show('projects');}}
+    for(const s of await DB.byProject(P.id)){await delSessionImages(s);await DB.del('sessions',s.id);}await DB.del('projects',P.id);P=null;SES=null;await renderProjects();show('projects');}}
 ]);
 
 /* ---------- Exportar e importar ---------- */
 async function exportProject(){
-  const sessions=await DB.byProject(P.id);
-  const blob=new Blob([JSON.stringify({app:'estudio-ia',version:1,exportedAt:new Date().toISOString(),projects:[{project:P,sessions}]})],{type:'application/json'});
+  const sessions=await DB.byProject(P.id); const images=[];
+  for(const s of sessions)for(const m of s.messages)if(m.imageId){const r=await DB.get('images',m.imageId);if(r)images.push(r);}
+  const blob=new Blob([JSON.stringify({app:'estudio-ia',version:2,exportedAt:new Date().toISOString(),projects:[{project:P,sessions,images}]})],{type:'application/json'});
   const name=(P.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase()||'asignatura')+'.json';
   const file=new File([blob],name,{type:'application/json'});
   if(navigator.canShare&&navigator.canShare({files:[file]})){try{await navigator.share({files:[file],title:P.name});return;}catch(e){if(e.name==='AbortError')return;}}
@@ -492,14 +513,15 @@ $('#inImport').onchange=async e=>{
   if(!j||j.app!=='estudio-ia'||!Array.isArray(j.projects)){toast('El archivo no corresponde a esta app');return;}
   let n=0;
   for(const it of j.projects){
-    const p=it.project,ss=it.sessions||[]; if(!p||!p.id)continue;
+    const p=it.project,ss=it.sessions||[],ims=it.images||[]; if(!p||!p.id)continue;
     const ex=await DB.get('projects',p.id);
     if(ex){
-      if(confirm('Ya existe "'+ex.name+'". ¿Reemplazarla con la versión importada? (Cancelar la importa como copia)')){for(const s of await DB.byProject(p.id))await DB.del('sessions',s.id);}
-      else{const map={};p.id=uid();p.name=p.name+' (copia)';ss.forEach(s=>{map[s.id]=uid();s.id=map[s.id];});p.sessionId=map[p.sessionId]||null;}
+      if(confirm('Ya existe "'+ex.name+'". ¿Reemplazarla con la versión importada? (Cancelar la importa como copia)')){for(const s of await DB.byProject(p.id)){await delSessionImages(s);await DB.del('sessions',s.id);}}
+      else{const map={};p.id=uid();p.name=p.name+' (copia)';ss.forEach(s=>{map[s.id]=uid();s.id=map[s.id];});p.sessionId=map[p.sessionId]||null;
+        const im={};ims.forEach(x=>{im[x.id]=uid();x.id=im[x.id];});ss.forEach(s=>s.messages.forEach(m=>{if(m.imageId)m.imageId=im[m.imageId]||m.imageId;}));}
     }
     ss.forEach(s=>s.projectId=p.id);
-    await DB.put('projects',p); for(const s of ss)await DB.put('sessions',s); n++;
+    await DB.put('projects',p); for(const x of ims)await DB.put('images',x); for(const s of ss)await DB.put('sessions',s); n++;
   }
   await renderProjects(); toast(n?('Asignaturas importadas: '+n):'No se encontraron asignaturas en el archivo');
 };
