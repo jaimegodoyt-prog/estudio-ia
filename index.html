@@ -63,7 +63,7 @@ button{cursor:pointer;-webkit-tap-highlight-color:transparent}
 .dot{width:8px;height:8px;border-radius:4px;background:var(--ac2);animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.3}}
 @media (prefers-reduced-motion: reduce){.dot{animation:none}}
-.live{border-radius:12px;border:1px solid var(--bd2);background:var(--sf);padding:10px 14px;font-size:14px;line-height:1.5;color:var(--mu);max-height:96px;overflow-y:auto}
+.live{display:flex;align-items:center;gap:10px;border-radius:12px;border:1px solid var(--bd2);background:var(--sf);padding:10px 14px;font-size:14px;line-height:1.5;color:var(--mu);max-height:96px;overflow-y:auto}
 .composer{display:flex;gap:8px;align-items:flex-end}
 .composer textarea{flex:1;min-height:50px;max-height:140px;resize:none;border-radius:14px;border:1px solid var(--bd2);background:var(--sf);padding:12px 14px;font-size:16px;line-height:1.4}
 .composer .btn{width:auto}
@@ -84,6 +84,12 @@ textarea.area{width:100%;min-height:150px;resize:vertical;border-radius:14px;bor
 .note{font-size:13px;line-height:1.5;color:var(--mu)}
 .sheet{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;z-index:20}
 .sheet .box{width:100%;max-width:720px;background:var(--bg);border-radius:18px 18px 0 0;padding:16px 14px calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:8px}
+.cam{position:fixed;inset:0;background:#000;z-index:40;display:flex;align-items:center;justify-content:center}
+.cam video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.cam .n{position:relative;font-size:120px;font-weight:700;color:#FFFFFF;text-shadow:0 2px 16px rgba(0,0,0,.6)}
+.cam .msg{position:absolute;top:calc(24px + env(safe-area-inset-top,0px));left:0;right:0;text-align:center;color:#FFFFFF;font-size:15px;text-shadow:0 1px 8px rgba(0,0,0,.7)}
+.cam .cx{position:absolute;bottom:calc(28px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);min-height:52px;padding:0 28px;border-radius:26px;border:1px solid rgba(255,255,255,.5);background:rgba(0,0,0,.45);color:#FFFFFF;font-size:16px;font-weight:600}
+.cam .fl{position:absolute;inset:0;background:#FFFFFF;opacity:0;pointer-events:none;transition:opacity .15s}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(120px + env(safe-area-inset-bottom,0px));max-width:90%;background:var(--tx);color:var(--bg);border-radius:12px;padding:10px 14px;font-size:14px;z-index:30;line-height:1.4}
 </style>
 </head>
@@ -113,7 +119,7 @@ textarea.area{width:100%;min-height:150px;resize:vertical;border-radius:14px;bor
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--mu)" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
   </button>
   <div class="scroll msgs" id="msgs"></div>
-  <div class="live" id="live" hidden></div>
+  <div class="live" id="live" hidden><span id="liveTx" style="flex:1;min-width:0"></span><button class="link" id="bRecCancel" style="padding:0 4px;flex-shrink:0">Cancelar</button></div>
   <div class="composer" id="composer" hidden>
     <textarea id="txt" rows="1" placeholder="Escribe tu pregunta" aria-label="Mensaje"></textarea>
     <button class="btn primary" id="bSend">Enviar</button>
@@ -171,6 +177,12 @@ textarea.area{width:100%;min-height:150px;resize:vertical;border-radius:14px;bor
         <div class="seg" id="audSeg" style="width:100%"><button data-a="original" style="flex:1">Audio original</button><button data-a="texto" style="flex:1">Texto transcrito</button></div>
       </div>
     </div>
+    <div class="panel">
+      <h2>Cámara</h2>
+      <div class="field"><div class="lb">La foto se saca sola después de</div>
+        <div class="seg" id="camSeg" style="width:100%"><button data-d="1" style="flex:1">1 s</button><button data-d="2" style="flex:1">2 s</button><button data-d="3" style="flex:1">3 s</button><button data-d="5" style="flex:1">5 s</button></div>
+      </div>
+    </div>
     <div class="note">Las claves quedan guardadas solo en este equipo. Con Claude, los audios siempre se transcriben a texto antes de enviarse.</div>
   </div>
   <button class="btn primary" id="bSaveSet">Guardar ajustes</button>
@@ -181,6 +193,7 @@ textarea.area{width:100%;min-height:150px;resize:vertical;border-radius:14px;bor
 <input type="file" id="inPhoto" accept="image/*" capture="environment" hidden>
 <input type="file" id="inCtx" accept="image/*,application/pdf,.pdf,text/plain,.txt,.md,.csv" multiple hidden>
 <input type="file" id="inImport" accept="application/json,.json" hidden>
+<div class="cam" id="cam" hidden><video id="camV" playsinline muted autoplay></video><div class="msg" id="camMsg">Abriendo cámara…</div><div class="n" id="camN"></div><div class="fl" id="camFl"></div><button class="cx" id="camX">Cancelar</button></div>
 <div class="sheet" id="sheet" hidden><div class="box" id="sheetBox"></div></div>
 <div class="toast" id="toast" hidden></div>
 
@@ -204,7 +217,7 @@ const DB={db:null,
   del(s,id){return this.tx(s,'readwrite',st=>st.delete(id));},
   byProject(pid){return this.tx('sessions','readonly',st=>st.index('projectId').getAll(pid));}
 };
-const DEF={provider:'gemini',claudeKey:'',claudeModel:'claude-sonnet-5-5',geminiKey:'',geminiModel:'gemini-flash-lite-latest',geminiAudio:'original'};
+const DEF={provider:'gemini',claudeKey:'',claudeModel:'claude-sonnet-5-5',geminiKey:'',geminiModel:'gemini-flash-lite-latest',geminiAudio:'original',camDelay:2};
 let S={...DEF};
 function loadSettings(){try{S={...DEF,...JSON.parse(localStorage.getItem('estudio-ia-ajustes')||'{}')};}catch(e){S={...DEF};}}
 function saveSettings(){try{localStorage.setItem('estudio-ia-ajustes',JSON.stringify(S));}catch(e){toast('No se pudieron guardar los ajustes en este navegador');}}
@@ -219,12 +232,21 @@ const fmtTime=t=>t?new Date(t).toLocaleTimeString('es-CL',{hour:'2-digit',minute
 const fmtDate=t=>new Date(t).toLocaleDateString('es-CL',{day:'numeric',month:'short',year:'numeric'});
 const fmtDur=s=>{s=Math.round(s||0);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');};
 const fmtSize=b=>b>1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB';
-function show(v){document.querySelectorAll('.view').forEach(e=>e.classList.remove('on'));$('#v'+v[0].toUpperCase()+v.slice(1)).classList.add('on');}
+function show(v){document.querySelectorAll('.view').forEach(e=>e.classList.remove('on'));$('#v'+v[0].toUpperCase()+v.slice(1)).classList.add('on');syncWake();}
+let wakeLock=null,wakeBusy=false;
+async function syncWake(){
+  if(wakeBusy||!('wakeLock' in navigator))return; wakeBusy=true;
+  try{const want=document.visibilityState==='visible'&&(!!rec||$('#vChat').classList.contains('on'));
+    if(want&&!wakeLock){wakeLock=await navigator.wakeLock.request('screen');wakeLock.addEventListener('release',()=>{wakeLock=null;});}
+    else if(!want&&wakeLock){const w=wakeLock;wakeLock=null;await w.release();}}
+  catch(e){}finally{wakeBusy=false;}}
+document.addEventListener('visibilitychange',()=>setTimeout(syncWake,300));
 function readB64(blob){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]);r.onerror=()=>rej(new Error('No se pudo leer el archivo'));r.readAsDataURL(blob);});}
+function encodePhoto(src,w0,h0){const mk=(max,q)=>{const k=Math.min(1,max/Math.max(w0,h0));const w=Math.round(w0*k),h=Math.round(h0*k);
+    const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(src,0,0,w,h);return c.toDataURL('image/jpeg',q).split(',')[1];};
+  return {full:mk(1280,.82),thumb:mk(360,.6)};}
 function toJpegs(file){return new Promise((res,rej)=>{const url=URL.createObjectURL(file);const img=new Image();
-  img.onload=()=>{const mk=(max,q)=>{let w=img.naturalWidth,h=img.naturalHeight;const k=Math.min(1,max/Math.max(w,h));w=Math.round(w*k);h=Math.round(h*k);
-      const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);return c.toDataURL('image/jpeg',q).split(',')[1];};
-    const out={full:mk(1280,.82),thumb:mk(360,.6)};URL.revokeObjectURL(url);res(out);};
+  img.onload=()=>{const out=encodePhoto(img,img.naturalWidth,img.naturalHeight);URL.revokeObjectURL(url);res(out);};
   img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('No se pudo leer la imagen'));};img.src=url;});}
 async function delSessionImages(s){for(const m of (s&&s.messages)||[])if(m.imageId){try{await DB.del('images',m.imageId);}catch(e){}}}
 function toJpeg(file,max=1568,q=.85){return new Promise((res,rej)=>{const url=URL.createObjectURL(file);const img=new Image();
@@ -281,7 +303,7 @@ function msgHTML(m,i){
     else inner=`<div class="bub u">${esc(m.text)}</div>`;
     return `<div class="m mu">${inner}<div class="meta">${fmtTime(m.time)}</div></div>`;
   }
-  if(m.type==='error') return `<div class="m ma"><div class="bub err"><div class="who" style="color:var(--er)">No se obtuvo respuesta</div>${esc(m.text)}<br><button class="link" data-retry="${i}">Reintentar</button></div></div>`;
+  if(m.type==='error') return `<div class="m ma"><div class="bub err"><div class="who" style="color:var(--er)">No se obtuvo respuesta</div>${esc(m.text)}<br><button class="link" data-retry="${i}">Reintentar</button>${SES.messages[i-1]&&SES.messages[i-1].type==='text'?`<button class="link" data-edit="${i}" style="margin-left:18px">Editar</button>`:''}</div></div>`;
   return `<div class="m ma"><div class="bub a"><div class="who">${m.provider==='gemini'?'Gemini':'Claude'}</div><div class="md">${md(m.text)}</div><button class="link" data-copy="${i}">Copiar</button></div></div>`;
 }
 function scrollEnd(){const el=$('#msgs');el.scrollTop=el.scrollHeight;}
@@ -300,17 +322,28 @@ function appendMsg(i){
 }
 function updTyping(){
   let t=$('#typingEl');
-  if(busy){ if(!t){$('#msgs').insertAdjacentHTML('beforeend','<div class="m ma" id="typingEl"><div class="typing"><span class="dot"></span><span id="typingTx"></span></div></div>');}
+  if(busy){ if(!t){$('#msgs').insertAdjacentHTML('beforeend','<div class="m ma" id="typingEl"><div class="typing"><span class="dot"></span><span id="typingTx"></span><button class="link" id="bCancelReq" style="padding:0 0 0 6px;min-height:28px">Cancelar</button></div></div>');}
     $('#typingTx').textContent=waitNote||'Respondiendo…'; scrollEnd(); }
   else if(t) t.remove();
 }
 async function addUserMsg(m){m.role='user';m.time=Date.now();SES.messages.push(m);appendMsg(SES.messages.length-1);await saveSession();kick();}
+let cancelCtl=null;
+function cancelled(){const e=new Error('Consulta cancelada');e.name='Cancelled';return e;}
+async function pullBack(ses){
+  const back=[]; while(ses.messages.length&&ses.messages[ses.messages.length-1].role==='user')back.unshift(ses.messages.pop());
+  for(const m of back)if(m.imageId){try{await DB.del('images',m.imageId);}catch(e){}}
+  ses.updated=Date.now(); await DB.put('sessions',ses);
+  return back.filter(m=>m.type==='text').map(m=>m.text).join('\n\n');}
+function toComposer(txt){if(!txt)return;const c=$('#composer'),t=$('#txt');c.hidden=false;$('#bWrite').classList.add('on');
+  t.value=t.value.trim()?t.value+'\n\n'+txt:txt;t.style.height='auto';t.style.height=Math.min(140,t.scrollHeight)+'px';t.focus();}
 async function kick(){
   if(busy) return; const last=SES.messages[SES.messages.length-1]; if(!last||last.role!=='user') return;
   const ses=SES, prov=S.provider; busy=true; updTyping();
-  let out;
+  let out; cancelCtl=new AbortController();
   try{ const text=prov==='claude'?await callClaude(ses):await callGemini(ses); out={role:'assistant',type:'text',text:text||'(respuesta vacía)',provider:prov,time:Date.now()}; }
-  catch(e){ out={role:'assistant',type:'error',text:e.message||String(e),provider:prov,time:Date.now()}; }
+  catch(e){ if(e.name!=='Cancelled') out={role:'assistant',type:'error',text:e.message||String(e),provider:prov,time:Date.now()}; }
+  cancelCtl=null;
+  if(!out){ const txt=await pullBack(ses); busy=false; if(SES===ses){renderMsgs();toComposer(txt);} toast('Consulta cancelada'); return; }
   ses.messages.push(out); ses.updated=Date.now(); await DB.put('sessions',ses);
   busy=false; if(SES===ses){updTyping();appendMsg(ses.messages.length-1);kick();}
 }
@@ -348,13 +381,14 @@ async function buildTurns(ses,prov){
   return turns;
 }
 let waitNote='';
-async function req(url,opt){const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),90000);
+async function req(url,opt){const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),90000);const ext=cancelCtl;
+  if(ext){if(ext.signal.aborted)throw cancelled();ext.signal.addEventListener('abort',()=>ctl.abort(),{once:true});}
   try{return await fetch(url,{...opt,signal:ctl.signal});}
-  catch(e){if(e.name==='AbortError')throw new Error('La IA no respondió en 90 segundos. Toca Reintentar o cambia de modelo en Ajustes.');throw new Error('No hay conexión con el servicio. Revisa tu internet y toca Reintentar.');}
+  catch(e){if(ext&&ext.signal.aborted)throw cancelled();if(e.name==='AbortError')throw new Error('La IA no respondió en 90 segundos. Toca Reintentar o cambia de modelo en Ajustes.');throw new Error('No hay conexión con el servicio. Revisa tu internet y toca Reintentar.');}
   finally{clearTimeout(t);}}
 async function reqRetry(url,opt){
   try{for(let i=0;;i++){const r=await req(url,opt);
-    if([500,503,529].includes(r.status)&&i<2){waitNote='Servicio saturado, reintentando…';updTyping();await new Promise(s=>setTimeout(s,(i+1)*4000));continue;}
+    if([500,503,529].includes(r.status)&&i<2){waitNote='Servicio saturado, reintentando…';updTyping();await new Promise(s=>setTimeout(s,(i+1)*4000));if(cancelCtl&&cancelCtl.signal.aborted)throw cancelled();continue;}
     return r;}}
   finally{waitNote='';}}
 async function callClaude(ses){
@@ -383,12 +417,39 @@ async function callGemini(ses){
 }
 
 /* ---------- Foto ---------- */
-$('#bPhoto').onclick=()=>{$('#inPhoto').value='';$('#inPhoto').click();};
+let camStream=null,camTimer=null,camOn=false,camFailed=false;
+function nativePhoto(){$('#inPhoto').value='';$('#inPhoto').click();}
+async function sendPhoto(im){const id=uid();await DB.put('images',{id,data:im.full});await addUserMsg({type:'image',imageId:id,thumb:im.thumb});}
+function closeCam(){camOn=false;clearInterval(camTimer);camTimer=null;if(camStream){camStream.getTracks().forEach(t=>t.stop());camStream=null;}
+  const v=$('#camV');v.srcObject=null;$('#cam').hidden=true;$('#camN').textContent='';}
+async function openCam(){
+  if(camFailed||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){nativePhoto();return;}
+  if(camOn)return; camOn=true; $('#camMsg').textContent='Abriendo cámara…'; $('#camN').textContent=''; $('#cam').hidden=false;
+  try{camStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1440}}});}
+  catch(e){closeCam();camFailed=true;toast('No se pudo abrir la cámara propia. Toca Foto otra vez para usar la cámara del iPhone.');return;}
+  if(!camOn){closeCam();return;}
+  const v=$('#camV'); v.srcObject=camStream; try{await v.play();}catch(e){}
+  for(let i=0;i<50&&camOn&&!v.videoWidth;i++)await new Promise(r=>setTimeout(r,100));
+  if(!camOn)return;
+  if(!v.videoWidth){closeCam();camFailed=true;toast('La cámara no entregó imagen. Toca Foto otra vez para usar la cámara del iPhone.');return;}
+  $('#camMsg').textContent='Apunta al ejercicio';
+  let n=+S.camDelay||2; $('#camN').textContent=n;
+  camTimer=setInterval(async()=>{n--; if(n>0){$('#camN').textContent=n;return;}
+    clearInterval(camTimer);camTimer=null;$('#camN').textContent='';
+    const fl=$('#camFl');fl.style.opacity='1';setTimeout(()=>fl.style.opacity='0',150);
+    let im; try{im=encodePhoto(v,v.videoWidth,v.videoHeight);}catch(e){closeCam();toast('No se pudo capturar la foto');return;}
+    setTimeout(closeCam,200);
+    try{await sendPhoto(im);}catch(e){toast(e.message);}
+  },1000);
+}
+$('#bPhoto').onclick=openCam;
+$('#camX').onclick=closeCam;
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState!=='visible'&&camOn)closeCam();});
 $('#inPhoto').onchange=async e=>{const f=e.target.files[0];if(!f)return;
-  try{const im=await toJpegs(f);const id=uid();await DB.put('images',{id,data:im.full});await addUserMsg({type:'image',imageId:id,thumb:im.thumb});}catch(err){toast(err.message);}};
+  try{await sendPhoto(await toJpegs(f));}catch(err){toast(err.message);}};
 
 /* ---------- Audio ---------- */
-function setAudioUI(on){const b=$('#bAudio');b.classList.toggle('rec',on);$('#live').hidden=!on;if(!on){$('#audioLbl').textContent='Audio';$('#live').textContent='';}}
+function setAudioUI(on){syncWake();const b=$('#bAudio');b.classList.toggle('rec',on);$('#live').hidden=!on;if(!on){$('#audioLbl').textContent='Audio';$('#liveTx').textContent='';}}
 let recTimer;
 function tick(){if(!rec)return;const s=(Date.now()-rec.start)/1000;$('#audioLbl').textContent='Detener '+fmtDur(s);}
 async function startAudio(){
@@ -399,33 +460,36 @@ async function startAudio(){
     const mime=['audio/ogg;codecs=opus','audio/webm;codecs=opus','audio/webm','audio/mp4'].find(t=>MediaRecorder.isTypeSupported(t))||'';
     const mr=new MediaRecorder(stream,mime?{mimeType:mime}:undefined); const chunks=[];
     mr.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
-    mr.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());const dur=(Date.now()-rec.start)/1000;rec=null;clearInterval(recTimer);setAudioUI(false);
+    mr.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());const dur=(Date.now()-rec.start)/1000;const cx=rec.cancel;rec=null;clearInterval(recTimer);setAudioUI(false);
+      if(cx){toast('Audio descartado');return;}
       if(dur<0.6){toast('Audio demasiado corto');return;}
       const blob=new Blob(chunks,{type:mr.mimeType||mime||'audio/webm'});
       try{const data=await readB64(blob);await addUserMsg({type:'audio',audio:data,audioMime:(blob.type||'audio/webm').split(';')[0],dur,text:''});}catch(e){toast(e.message);}};
-    rec={mode:'media',mr,start:Date.now()}; mr.start(); $('#live').textContent='Grabando audio para Gemini…';
+    rec={mode:'media',mr,start:Date.now()}; mr.start(); $('#liveTx').textContent='Grabando audio para Gemini…';
   } else {
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     if(!SR){toast('Este navegador no tiene reconocimiento de voz. Usa Escribir, o Gemini con audio original.');return;}
     const sr=new SR(); sr.lang='es-CL'; sr.continuous=true; sr.interimResults=true;
     rec={mode:'speech',sr,start:Date.now(),final:'',interim:'',stopping:false};
     const r0=rec;
-    sr.onresult=e=>{let interim='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)r0.final+=t.trim()+' ';else interim+=t;}r0.interim=interim;$('#live').textContent=(r0.final+interim).trim()||'Escuchando…';};
+    sr.onresult=e=>{let interim='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)r0.final+=t.trim()+' ';else interim+=t;}r0.interim=interim;$('#liveTx').textContent=(r0.final+interim).trim()||'Escuchando…';};
     sr.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){toast('Permite el uso del micrófono para grabar audios');r0.stopping=true;}};
     sr.onend=async()=>{
       if(rec!==r0) return;
       if(!r0.stopping){try{sr.start();return;}catch(e){}}
       const dur=(Date.now()-r0.start)/1000; const text=(r0.final+r0.interim).trim(); rec=null; clearInterval(recTimer); setAudioUI(false);
+      if(r0.cancel){toast('Audio descartado');return;}
       if(!text){toast('No se detectó voz en el audio');return;}
       await addUserMsg({type:'audio',text,dur});
     };
     try{sr.start();}catch(e){rec=null;toast('No se pudo iniciar el micrófono');return;}
-    $('#live').textContent='Escuchando…';
+    $('#liveTx').textContent='Escuchando…';
   }
   setAudioUI(true); tick(); recTimer=setInterval(tick,500);
 }
 function stopAudio(){if(!rec)return;if(rec.mode==='media'){rec.mr.stop();}else{rec.stopping=true;try{rec.sr.stop();}catch(e){}}}
 $('#bAudio').onclick=()=>rec?stopAudio():startAudio();
+$('#bRecCancel').onclick=()=>{if(!rec)return;rec.cancel=true;if(rec.mode==='media'){rec.mr.stop();}else{rec.stopping=true;try{rec.sr.abort();}catch(e){}}};
 
 /* ---------- Escribir ---------- */
 $('#bWrite').onclick=()=>{const c=$('#composer');c.hidden=!c.hidden;$('#bWrite').classList.toggle('on',!c.hidden);if(!c.hidden)$('#txt').focus();};
@@ -434,6 +498,9 @@ $('#bSend').onclick=async()=>{const t=$('#txt').value.trim();if(!t)return;$('#tx
 
 /* ---------- Mensajes ---------- */
 $('#msgs').onclick=async e=>{
+  if(e.target.closest('#bCancelReq')){if(cancelCtl)cancelCtl.abort();return;}
+  const ed=e.target.closest('[data-edit]');
+  if(ed){if(+ed.dataset.edit!==SES.messages.length-1){toast('Solo se puede editar la última consulta');return;}SES.messages.splice(+ed.dataset.edit,1);const txt=await pullBack(SES);renderMsgs();toComposer(txt);return;}
   const r=e.target.closest('[data-retry]'),c=e.target.closest('[data-copy]');
   if(r){SES.messages.splice(+r.dataset.retry,1);await saveSession();renderMsgs();kick();}
   if(c){try{await navigator.clipboard.writeText(SES.messages[+c.dataset.copy].text);toast('Respuesta copiada');}catch(err){toast('No se pudo copiar');}}
@@ -529,12 +596,15 @@ $('#inImport').onchange=async e=>{
 /* ---------- Ajustes ---------- */
 function openSettings(){
   prevView=document.querySelector('.view.on')?.id==='vChat'?'chat':'projects';
-  $('#sCK').value=S.claudeKey;$('#sCM').value=S.claudeModel;$('#sGK').value=S.geminiKey;$('#sGM').value=S.geminiModel;renderAudSeg();show('settings');
+  $('#sCK').value=S.claudeKey;$('#sCM').value=S.claudeModel;$('#sGK').value=S.geminiKey;$('#sGM').value=S.geminiModel;renderAudSeg();camTmp=S.camDelay;renderCamSeg();show('settings');
 }
 let audTmp;
 function renderAudSeg(v){audTmp=v||audTmp||S.geminiAudio;document.querySelectorAll('#audSeg button').forEach(b=>b.classList.toggle('on',b.dataset.a===audTmp));}
+let camTmp=2;
+function renderCamSeg(){document.querySelectorAll('#camSeg button').forEach(b=>b.classList.toggle('on',+b.dataset.d===+camTmp));}
+$('#camSeg').onclick=e=>{const b=e.target.closest('[data-d]');if(b){camTmp=+b.dataset.d;renderCamSeg();}};
 $('#audSeg').onclick=e=>{const b=e.target.closest('[data-a]');if(b)renderAudSeg(b.dataset.a);};
-$('#bSaveSet').onclick=()=>{S.claudeKey=$('#sCK').value.trim();S.claudeModel=$('#sCM').value.trim()||DEF.claudeModel;S.geminiKey=$('#sGK').value.trim();S.geminiModel=$('#sGM').value.trim()||DEF.geminiModel;S.geminiAudio=audTmp;saveSettings();toast('Ajustes guardados');back();};
+$('#bSaveSet').onclick=()=>{S.claudeKey=$('#sCK').value.trim();S.claudeModel=$('#sCM').value.trim()||DEF.claudeModel;S.geminiKey=$('#sGK').value.trim();S.geminiModel=$('#sGM').value.trim()||DEF.geminiModel;S.geminiAudio=audTmp;S.camDelay=camTmp;saveSettings();toast('Ajustes guardados');back();};
 $('#bSetBack').onclick=()=>back();
 function back(){if(prevView==='chat'&&P){renderChat();show('chat');}else{renderProjects();show('projects');}}
 $('#bLoadC').onclick=async()=>{const k=$('#sCK').value.trim();if(!k){toast('Ingresa primero la clave de Claude');return;}
